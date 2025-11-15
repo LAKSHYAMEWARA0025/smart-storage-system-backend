@@ -1,0 +1,34 @@
+# Python
+_pycache_/
+*.py[cod]
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+
+# Environment
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# temporary dir
+tmp/
+
+# Backup
+backup/
+
+# MyPy / Pytest / Coverage
+.mypy_cache/
+.pytest_cache/
+coverage/
+
+# IDEs / Editors
+.vscode/
+.idea/
+
+# Misc
+.DS_Store
+*.swp
