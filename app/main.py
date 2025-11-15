@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- Imports for our project ---
-from app.controllers import storage_controller  # Our API routes
+from app.controllers import file_controller  # Our API routes
 from app.config import supabase              # Initializes the Supabase client
 # --------------------------------
 
@@ -29,7 +29,7 @@ def create_app() -> FastAPI:
     # Routers
     # This is where we add all our API endpoints
     app.include_router(
-        storage_controller.router, 
+        file_controller.router, 
         prefix="/api", 
         tags=["Storage"]
     )
