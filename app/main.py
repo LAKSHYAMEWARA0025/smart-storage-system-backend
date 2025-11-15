@@ -1,9 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# --- Imports for our project ---
+from app.controllers import storage_controller  # Our API routes
+from app.config import supabase              # Initializes the Supabase client
+# --------------------------------
+
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="My API",
-        description="Production-ready FastAPI backend",
+        title="Smart Storage System API",
+        description="API for uploading files and retrieving URLs.",
         version="1.0.0"
     )
 
@@ -15,13 +21,20 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
     @app.get("/")
     def read_root():
-        return {"message": "Hello, FastAPI!"}
+        return {"message": "Welcome to the Smart Storage System API!"}
 
     # Routers
-    # app.include_router(api_router, prefix="/api/v1")
+    # This is where we add all our API endpoints
+    app.include_router(
+        storage_controller.router, 
+        prefix="/api", 
+        tags=["Storage"]
+    )
 
     return app
 
+# This is the main app object uvicorn will use
 app = create_app()

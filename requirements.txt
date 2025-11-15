@@ -3,3 +3,12 @@ dotenv
 fastapi
 pydantic
 pymongoose
+fastapi
+uvicorn[standard]
+cloudinary          # <-- 1. You MUST add this for Cloudinary uploads
+# python-dotenv       # <-- 2. The package is 'python-dotenv', not 'dotenv'
+# python-multipart    # <-- 3. You MUST add this for FastAPI file uploads
+# pymongo[srv]        # <-- 4. This is the correct MongoDB driver
+SQLAlchemy
+asyncpg
+supabase
