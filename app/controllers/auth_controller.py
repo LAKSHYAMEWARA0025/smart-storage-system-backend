@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from app.config import supabase
+from app.config import get_supabase
 from app.models.auth_model import UserAuth, TokenResponse
 
 router = APIRouter()
@@ -10,6 +10,7 @@ async def signup(user_credentials: UserAuth):
     Creates a new user in Supabase Auth.
     """
     try:
+        supabase = get_supabase()
         res = supabase.auth.sign_up({
             "email": user_credentials.email,
             "password": user_credentials.password,
@@ -29,6 +30,7 @@ async def login(user_credentials: UserAuth):
     Logs in a user and returns a JWT access token.
     """
     try:
+        supabase = get_supabase()
         res = supabase.auth.sign_in_with_password({
             "email": user_credentials.email,
             "password": user_credentials.password

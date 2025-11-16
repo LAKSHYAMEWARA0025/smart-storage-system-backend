@@ -1,7 +1,7 @@
 from fastapi import Depends, HTTPException, status
 # 1. Import HTTPBearer instead
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.config import supabase
+from app.config import get_supabase
 
 # 2. Use HTTPBearer() - it's simpler
 oauth2_scheme = HTTPBearer()
@@ -16,7 +16,8 @@ def get_current_user(auth: HTTPAuthorizationCredentials = Depends(oauth2_scheme)
     token = auth.credentials 
     
     try:
-        # supabase.auth.get_user() validates the token and returns the user
+        # Get supabase client and validate the token
+        supabase = get_supabase()
         res = supabase.auth.get_user(token)
         
         if not res.user:
