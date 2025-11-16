@@ -11,7 +11,7 @@ from mongoengine import connect
 
 from app.core.celery_app import celery_app
 from app.models.mongo_models import AnalysisDataModel, UploadJobModel, FailedRecordModel
-from app.config import MONGO_URI, MONGO_DB_NAME
+from app.config import MONGO_URI, MONGO_DB_NAME, SUPABASE_DB_URL
 
 
 @worker_process_init.connect
@@ -36,6 +36,27 @@ def init_worker(**kwargs):
         config.mongo_client = AsyncIOMotorClient(MONGO_URI)
         config.mongodb = config.mongo_client[MONGO_DB_NAME]
         print("✅ Worker Motor connected")
+        
+        # Initialize SQLAlchemy engine for PostgreSQL
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        
+        try:
+            from sqlalchemy import text
+            config.sql_engine = create_engine(
+                SUPABASE_DB_URL,
+                pool_pre_ping=True,
+                pool_size=10,
+                max_overflow=20
+            )
+            config.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=config.sql_engine)
+            # Test connection
+            with config.sql_engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            print("✅ Worker PostgreSQL connected")
+        except Exception as pg_error:
+            print(f"❌ Worker PostgreSQL connection failed: {pg_error}")
+            raise
         
     except Exception as e:
         print(f"❌ Worker database connection failed: {e}")

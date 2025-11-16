@@ -3,8 +3,7 @@ Celery Monitoring Script
 Monitor Celery workers and tasks
 """
 
-from app.workers import celery_app
-from celery import Celery
+from app.core.celery_app import celery_app
 
 def check_worker_status():
     """Check if workers are running"""

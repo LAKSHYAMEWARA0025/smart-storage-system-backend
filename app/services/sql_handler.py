@@ -11,7 +11,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql import text
 from app.services.schema_analyzer import Schema
-from app.config import get_db, sql_engine
+from app.config import get_db
 from datetime import datetime
 
 
@@ -41,6 +41,7 @@ class SQLHandler:
     """
     
     def __init__(self):
+        from app.config import sql_engine
         self.engine = sql_engine
         self.metadata = MetaData()
     
@@ -84,17 +85,28 @@ class SQLHandler:
                 return True
             
             # Create columns
-            columns = [
-                Column('id', Integer, primary_key=True, autoincrement=True)
-            ]
+            columns = []
+            has_id_field = 'id' in schema.fields
+            
+            # Only add auto-increment id if data doesn't have one
+            if not has_id_field:
+                columns.append(
+                    Column('id', Integer, primary_key=True, autoincrement=True)
+                )
             
             for field_name, field_info in schema.fields.items():
                 col_type = self._map_type_to_sql(field_info.type)
                 nullable = field_info.nullable
                 
-                columns.append(
-                    Column(field_name, col_type, nullable=nullable)
-                )
+                # If this is the id field from data, make it primary key
+                if field_name == 'id' and has_id_field:
+                    columns.append(
+                        Column(field_name, col_type, primary_key=True, nullable=False)
+                    )
+                else:
+                    columns.append(
+                        Column(field_name, col_type, nullable=nullable)
+                    )
             
             # Create table
             table = Table(table_name, self.metadata, *columns)

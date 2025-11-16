@@ -146,13 +146,26 @@ class UploadController:
             analysis_id = HashUtils.generate_analysis_id()
             
             # Prepare parsed data grouped by schema
+            # Convert Decimal and other non-JSON types to serializable formats
+            def make_serializable(obj):
+                """Convert non-JSON serializable objects"""
+                from decimal import Decimal
+                if isinstance(obj, dict):
+                    return {k: make_serializable(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [make_serializable(item) for item in obj]
+                elif isinstance(obj, Decimal):
+                    return float(obj)
+                return obj
+            
             parsed_data = {}
             for schema in analysis.schemas:
                 schema_objects = [
                     obj for obj in all_objects
                     if set(obj.keys()) == schema.field_names
                 ]
-                parsed_data[schema.schema_id] = schema_objects
+                # Make all data serializable
+                parsed_data[schema.schema_id] = [make_serializable(obj) for obj in schema_objects]
             
             # Store in MongoDB with TTL
             expires_at = datetime.utcnow() + timedelta(seconds=REDIS_UPLOAD_DATA_TTL)
