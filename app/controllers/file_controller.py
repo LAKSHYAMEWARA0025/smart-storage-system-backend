@@ -1,7 +1,7 @@
 import mimetypes
 import json
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Depends
-from fastapi.encoders import jsonable_encoder  # <-- This is the key
+from fastapi.encoders import jsonable_encoder
 from typing import List, Any
 from uuid import UUID
 
@@ -20,7 +20,7 @@ BUCKET_NAME = "uploads"
 
 
 # ===================================================================
-#  1. THE JSON STORAGE FUNCTION (Fixed Return)
+#  1. THE JSON STORAGE FUNCTION
 # ===================================================================
 async def json_storage_function(user_id: UUID, file_content: bytes, filename: str) -> dict:
     """
@@ -32,8 +32,7 @@ async def json_storage_function(user_id: UUID, file_content: bytes, filename: st
         print("File was valid JSON.")
         
         response_data = {"message": "JSON data processed successfully", "filename": filename}
-        # --- FIX ---
-        # Wrap the return in jsonable_encoder to be safe
+        # Wrap in encoder to be 100% safe
         return jsonable_encoder(response_data)
         
     except json.JSONDecodeError:
@@ -42,7 +41,7 @@ async def json_storage_function(user_id: UUID, file_content: bytes, filename: st
 
 
 # ===================================================================
-#  2. THE MEDIA STORAGE FUNCTION (Fixed Return)
+#  2. THE MEDIA STORAGE FUNCTION (The Final Fix)
 # ===================================================================
 async def media_storage_function(user_id: UUID, file_content: bytes, filename: str) -> dict:
     """
@@ -52,7 +51,8 @@ async def media_storage_function(user_id: UUID, file_content: bytes, filename: s
     print(f"--- Media Storage Function CALLED for user: {user_id} ---")
     try:
         file_details = get_file_details(filename)
-        file_path_in_bucket = f"{user_id}/{filename}" # user_id is now a UUID
+        # We can use the UUID object for the path, that's fine
+        file_path_in_bucket = f"{user_id}/{filename}"
         content_type, _ = mimetypes.guess_type(filename)
         content_type = content_type or "application/octet-stream"
         
@@ -63,22 +63,24 @@ async def media_storage_function(user_id: UUID, file_content: bytes, filename: s
         )
         public_url = supabase.storage.from_(BUCKET_NAME).get_public_url(file_path_in_bucket)
         
+        # --- THIS IS THE FIX ---
+        # Convert the UUID to a string *before* creating the Pydantic model
         new_file_data = FileBase(
-            user_id=user_id,
+            user_id=str(user_id), # <-- CONVERT UUID TO STRING
             filename=filename,
             url=public_url,
             file_type=file_details["file_type"],
             extension=file_details["extension"]
         )
+        # -----------------------
         
         db_res = supabase.table("files").insert(
             new_file_data.model_dump(),
             returning="minimal"
         ).execute()
         
-        # --- FIX ---
-        # Return the jsonable_encoder version of the Pydantic model
-        # This will 100% convert the UUID to a string.
+        # Now we are returning a model that *only* contains strings,
+        # so the encoder will have no problem.
         return jsonable_encoder(new_file_data)
         
     except Exception as e:
@@ -121,7 +123,7 @@ async def upload_file(
 
 
 # ===================================================================
-#  4. THE GET ROUTES (Fixed Return)
+#  4. THE GET ROUTES (Unchanged, but correct)
 # ===================================================================
 
 @router.get("/files", response_model=List[FileResponse])
@@ -132,10 +134,10 @@ async def get_files_for_user(
     Retrieves all file records for the authenticated user.
     """
     try:
+        # str(current_user_id) is correct for the query
         res = supabase.table("files").select("*").eq("user_id", str(current_user_id)).execute()
         
-        # --- FIX ---
-        # jsonable_encoder handles the list of dicts and any UUIDs inside
+        # jsonable_encoder is correct here, it handles the list of dicts
         return jsonable_encoder(res.data)
         
     except Exception as e:
@@ -157,8 +159,7 @@ async def search_files_by_type(
             .eq("file_type", file_type.lower()) \
             .execute()
             
-        # --- FIX ---
-        # jsonable_encoder handles the list of dicts and any UUIDs inside
+        # jsonable_encoder is correct here
         return jsonable_encoder(res.data)
         
     except Exception as e:
