@@ -1,22 +1,35 @@
 import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import redis.asyncio as redis  # <-- Import async Redis
 
-# Load environment variables from .env
+# Load .env
 load_dotenv()
 
-# Fetch Supabase credentials from .env
+# --- Supabase Setup ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Supabase URL and Key must be set in .env file")
-
-# Initialize the Supabase client
-# This one client handles both database and storage
+# ... (supabase client init) ...
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     print("Supabase client initialized successfully.")
 except Exception as e:
     print(f"Error initializing Supabase client: {e}")
+    raise
+
+# --- Redis Setup ---
+REDIS_URL = os.getenv("REDIS_URL")
+
+if not REDIS_URL:
+    raise ValueError("REDIS_URL environment variable is not set!")
+
+try:
+    # Create the async Redis client
+    redis_client = redis.from_url(
+        REDIS_URL, 
+        decode_responses=True # <-- So we get strings, not bytes
+    )
+    print("Redis client initialized successfully.")
+except Exception as e:
+    print(f"Error initializing Redis client: {e}")
     raise

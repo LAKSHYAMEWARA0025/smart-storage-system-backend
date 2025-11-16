@@ -12,3 +12,4 @@ cloudinary          # <-- 1. You MUST add this for Cloudinary uploads
 SQLAlchemy
 asyncpg
 supabase
+redis
