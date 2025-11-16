@@ -6,7 +6,7 @@ from typing import List, Any
 from uuid import UUID
 
 # Import our Supabase client AND our new Redis client
-from app.config import supabase, redis_client 
+from app.config import get_supabase, get_redis 
 
 # Import our helper and models
 from app.utils.file_helpers import get_file_details
@@ -19,43 +19,102 @@ router = APIRouter()
 BUCKET_NAME = "uploads"
 CACHE_EXPIRATION_SECONDS = 3600 # Cache for 1 hour
 
+# Get clients
+supabase = None
+redis_client = None
+
+def get_clients():
+    """Get supabase and redis clients"""
+    global supabase, redis_client
+    if supabase is None:
+        supabase = get_supabase()
+    if redis_client is None:
+        redis_client = get_redis()
+    return supabase, redis_client
+
 
 # ===================================================================
-#  1. THE JSON STORAGE FUNCTION (with Cache Invalidation)
+#  1. THE JSON STORAGE FUNCTION (Integrated with Smart Storage)
 # ===================================================================
 async def json_storage_function(user_id: UUID, file_content: bytes, filename: str) -> dict:
     """
-    This is the new function for handling JSON data.
-    It also invalidates the cache.
+    Routes JSON files to the smart storage system for structured data handling.
     """
     print(f"--- JSON Storage Function CALLED for user: {user_id} ---")
     try:
+        # Validate JSON
         data = json.loads(file_content.decode('utf-8'))
         print("File was valid JSON.")
         
-        # ---
-        # TODO: Add logic here to save the JSON data
-        # ---
-
+        # Route to smart storage system
+        from app.controllers.upload_controller import UploadController
+        from fastapi import UploadFile
+        from io import BytesIO
+        
+        # Create UploadFile object from bytes
+        file_obj = BytesIO(file_content)
+        upload_file = UploadFile(filename=filename, file=file_obj)
+        
+        # Analyze the file
+        analysis_result = await UploadController.analyze_upload(
+            files=[upload_file],
+            user_id=str(user_id),
+            metadata=None
+        )
+        
+        # If no conflicts, auto-execute
+        if not analysis_result['requires_decision']:
+            # Auto-execute with default decisions
+            decisions = {}
+            for schema in analysis_result['schemas_detected']:
+                decisions[schema['schema_id']] = {
+                    'action': 'create',
+                    'custom_name': None
+                }
+            
+            execute_result = await UploadController.execute_upload(
+                analysis_id=analysis_result['analysis_id'],
+                decisions=decisions,
+                user_id=str(user_id)
+            )
+            
+            response_data = {
+                "message": "JSON data processed and stored successfully",
+                "filename": filename,
+                "job_id": execute_result['job_id'],
+                "schemas_detected": len(analysis_result['schemas_detected']),
+                "total_records": analysis_result['total_records']
+            }
+        else:
+            # Conflicts detected - return analysis for user decision
+            response_data = {
+                "message": "JSON data analyzed - user decision required",
+                "filename": filename,
+                "analysis_id": analysis_result['analysis_id'],
+                "requires_decision": True,
+                "conflicts": [
+                    s['conflict'] for s in analysis_result['schemas_detected']
+                    if s.get('conflict')
+                ]
+            }
+        
         # --- CACHE INVALIDATION ---
-        # A new file was added, so we MUST delete the user's old cache.
         try:
             cache_key_files = f"files:{user_id}"
             await redis_client.delete(cache_key_files)
             print(f"Cache invalidated for key: {cache_key_files}")
-            # You could also delete search keys, but that's more complex.
-            # This is the simplest, most effective invalidation.
         except Exception as e:
-            # If cache fails, just log it. Don't fail the upload.
             print(f"Redis cache invalidation failed: {e}")
         # --------------------------
         
-        response_data = {"message": "JSON data processed successfully", "filename": filename}
         return jsonable_encoder(response_data)
         
     except json.JSONDecodeError:
         print("Error: Invalid JSON content.")
         raise HTTPException(status_code=400, detail="Invalid JSON content in file.")
+    except Exception as e:
+        print(f"Error processing JSON file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process JSON file: {str(e)}")
 
 
 # ===================================================================
@@ -69,6 +128,8 @@ async def media_storage_function(user_id: UUID, file_content: bytes, filename: s
     """
     print(f"--- Media Storage Function CALLED for user: {user_id} ---")
     try:
+        supabase, redis_client = get_clients()
+        
         file_details = get_file_details(filename)
         file_path_in_bucket = f"{user_id}/{filename}"
         content_type, _ = mimetypes.guess_type(filename)
@@ -155,6 +216,8 @@ async def get_files_for_user(
     Retrieves all file records for the authenticated user.
     Checks cache first.
     """
+    supabase, redis_client = get_clients()
+    
     # 1. Define a unique cache key for this user's request
     cache_key = f"files:{current_user_id}"
     
@@ -204,6 +267,8 @@ async def search_files_by_type(
     Retrieves files for the authenticated user, filtered by file_type.
     Checks cache first.
     """
+    supabase, redis_client = get_clients()
+    
     # 1. Define a unique cache key for this specific search
     cache_key = f"files_search:{current_user_id}:{file_type.lower()}"
     
