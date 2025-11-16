@@ -2,14 +2,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- Imports for our project ---
-from app.controllers import file_controller  # Our API routes
+from app.controllers import file_controller  # Our storage routes
+from app.controllers import auth_controller  # Our new auth routes
 from app.config import supabase              # Initializes the Supabase client
 # --------------------------------
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Smart Storage System API",
-        description="API for uploading files and retrieving URLs.",
+        description="API for uploading files, retrieving URLs, and authentication.",
         version="1.0.0"
     )
 
@@ -27,7 +28,11 @@ def create_app() -> FastAPI:
         return {"message": "Welcome to the Smart Storage System API!"}
 
     # Routers
-    # This is where we add all our API endpoints
+    app.include_router(
+        auth_controller.router, 
+        prefix="/auth", 
+        tags=["Auth"]
+    )
     app.include_router(
         file_controller.router, 
         prefix="/api", 
