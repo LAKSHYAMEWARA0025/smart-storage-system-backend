@@ -74,7 +74,9 @@ async def execute_upload(
     result = await UploadController.execute_upload(
         analysis_id=request.analysis_id,
         decisions=request.decisions,
-        user_id=str(current_user_id)
+        user_id=str(current_user_id),
+        user_override=request.user_override,
+        acknowledge_risks=request.acknowledge_risks
     )
     
     return result

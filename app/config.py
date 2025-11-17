@@ -60,7 +60,9 @@ try:
     # Supabase
     SUPABASE_URL = get_env("SUPABASE_URL", required=True)
     SUPABASE_KEY = get_env("SUPABASE_KEY", required=True)
+    SUPABASE_SERVICE_KEY = get_env("SUPABASE_SERVICE_KEY", required=True)
     SUPABASE_DB_URL = get_env("SUPABASE_DB_URL", required=True)
+    SUPABASE_BUCKET_NAME = get_env("SUPABASE_BUCKET_NAME", required=False, default="media")
     
     # MongoDB
     MONGO_URI = get_env("MONGO_URI", required=True)
@@ -94,6 +96,8 @@ try:
     # System Limits
     MAX_INDEXES_PER_ENTITY = int(get_env("MAX_INDEXES_PER_ENTITY", required=False, default="5"))
     FAILED_RECORDS_TTL_DAYS = int(get_env("FAILED_RECORDS_TTL_DAYS", required=False, default="7"))
+    MAX_COLLECTIONS_PER_UPLOAD = int(get_env("MAX_COLLECTIONS_PER_UPLOAD", required=False, default="20"))
+    VARIANCE_THRESHOLD_MULTIPLIER = float(get_env("VARIANCE_THRESHOLD_MULTIPLIER", required=False, default="1.0"))
     
     print("✅ Configuration loaded successfully")
     print(f"📊 Environment: {NODE_ENV}")
@@ -115,6 +119,7 @@ except ValueError as e:
 
 # Supabase Client
 supabase: Client = None
+supabase_admin: Client = None  # Service role client for admin operations
 
 # Redis Client
 redis_client = None
@@ -136,13 +141,14 @@ async def init_databases():
     Initialize all database connections
     Called on application startup
     """
-    global supabase, redis_client, sql_engine, SessionLocal, mongo_client, mongodb
+    global supabase, supabase_admin, redis_client, sql_engine, SessionLocal, mongo_client, mongodb
     
     print("🚀 Initializing database connections...")
     
     try:
         # 1. Supabase Client
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
         print("✅ Supabase client initialized")
         
         # 2. SQLAlchemy Engine (for Supabase PostgreSQL)
@@ -237,6 +243,10 @@ async def close_databases():
 def get_supabase() -> Client:
     """Get Supabase client instance"""
     return supabase
+
+def get_supabase_admin() -> Client:
+    """Get Supabase admin client instance (service role)"""
+    return supabase_admin
 
 def get_redis():
     """Get Redis client instance"""

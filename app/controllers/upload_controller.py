@@ -117,7 +117,7 @@ class UploadController:
                     'storage_recommendation': decision.storage_type,
                     'confidence': decision.confidence,
                     'metrics': {
-                        'null_density': analysis.null_density,
+                        'null_density': schema.null_density,  # Use per-schema null density
                         'schema_variants': analysis.schema_variants,
                         'max_allowed_variants': analysis.max_allowed_variants,
                         'type_consistency': decision.metrics.get('type_consistency', 100.0)
@@ -182,9 +182,57 @@ class UploadController:
             )
             analysis_data.save()
             
+            # Get variance recommendation
+            try:
+                variance_recommendation = decision_engine.get_variance_recommendation(analysis)
+                decision_options = decision_engine.get_decision_options(analysis)
+            except Exception as e:
+                print(f"Error getting variance recommendation: {e}")
+                import traceback
+                traceback.print_exc()
+                variance_recommendation = {
+                    "type": "error",
+                    "reason": str(e),
+                    "storage_type": "nosql",
+                    "allow_override": False,
+                    "merge_required": False,
+                    "max_collections_allowed": 20,
+                    "warnings": []
+                }
+                decision_options = {}
+            
+            # Add merged schema to response if available
+            merged_schema_info = None
+            if analysis.merged_schema:
+                merged_decision = decision_engine._decide_for_schema(analysis.merged_schema, analysis)
+                merged_schema_info = {
+                    'schema_id': analysis.merged_schema.schema_id,
+                    'fields': {name: info.type for name, info in analysis.merged_schema.fields.items()},
+                    'record_count': analysis.merged_schema.record_count,
+                    'storage_recommendation': merged_decision.storage_type,
+                    'confidence': merged_decision.confidence,
+                    'metrics': {
+                        'null_density': analysis.merged_schema.null_density,
+                        'schema_variants': analysis.schema_variants,
+                        'max_allowed_variants': analysis.max_allowed_variants,
+                        'type_consistency': merged_decision.metrics.get('type_consistency', 100.0)
+                    },
+                    'suggested_name': f"{file_names[0].split('.')[0]}_merged" if file_names else "data_merged",
+                    'reasons': merged_decision.reasons,
+                    'warnings': variance_recommendation.get('warnings', [])
+                }
+                
+                # Add merged schema data to parsed_data
+                parsed_data[analysis.merged_schema.schema_id] = [make_serializable(obj) for obj in all_objects]
+            
+            # Update analysis data with merged schema
+            analysis_data.merged_schema = merged_schema_info
+            analysis_data.save()
+            
             # Check if user decision is required
-            requires_decision = any(
-                s.get('conflict') is not None for s in schemas_detected
+            requires_decision = (
+                any(s.get('conflict') is not None for s in schemas_detected) or
+                analysis.variance_level in ["high", "extreme"]
             )
             
             return {
@@ -192,6 +240,12 @@ class UploadController:
                 'files_analyzed': len(files),
                 'schemas_detected': schemas_detected,
                 'total_records': len(all_objects),
+                'schema_variants': analysis.schema_variants,
+                'max_allowed_variants': analysis.max_allowed_variants,
+                'variance_level': analysis.variance_level,
+                'recommendation': variance_recommendation,
+                'merged_schema': merged_schema_info,
+                'decision_options': decision_options,
                 'requires_decision': requires_decision
             }
             
@@ -207,7 +261,9 @@ class UploadController:
     async def execute_upload(
         analysis_id: str,
         decisions: Dict[str, Dict[str, Any]],
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        user_override: bool = False,
+        acknowledge_risks: bool = False
     ) -> Dict[str, Any]:
         """
         Execute upload based on analysis and user decisions
@@ -216,10 +272,14 @@ class UploadController:
             analysis_id: Analysis ID from analyze step
             decisions: User decisions for each schema
             user_id: User ID (from auth)
+            user_override: Whether user is overriding high variance recommendation
+            acknowledge_risks: Whether user acknowledges risks of separate collections
             
         Returns:
             Job information
         """
+        from app.config import MAX_COLLECTIONS_PER_UPLOAD
+        
         try:
             # Retrieve analysis data
             analysis_data = AnalysisDataModel.objects(analysis_id=analysis_id).first()
@@ -229,6 +289,38 @@ class UploadController:
                     status_code=404,
                     detail="Analysis not found or expired"
                 )
+            
+            # Validate number of collections
+            num_collections = len(decisions)
+            
+            if num_collections > MAX_COLLECTIONS_PER_UPLOAD:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot create more than {MAX_COLLECTIONS_PER_UPLOAD} collections per upload. "
+                           f"You requested {num_collections}. Please merge schemas or split your upload."
+                )
+            
+            # Check if this is a high variance case requiring override
+            schemas_detected = analysis_data.schemas_detected
+            schema_variants = len(schemas_detected)
+            
+            # Reconstruct variance level (simple check)
+            is_high_variance = num_collections > 3 and "merged_all" not in decisions
+            
+            if is_high_variance and num_collections > 1:
+                if not user_override:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="High schema variance detected. Set 'user_override: true' to create separate collections, "
+                               "or use the merged schema option (schema_id: 'merged_all')."
+                    )
+                
+                if not acknowledge_risks:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="You must set 'acknowledge_risks: true' to confirm you understand that "
+                               "separate collections with high variance cannot validate future uploads."
+                    )
             
             # Create upload job
             job_id = HashUtils.generate_job_id()

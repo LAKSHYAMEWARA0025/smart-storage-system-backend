@@ -164,8 +164,68 @@ def process_upload_task(
             # Determine action
             action = decision.get('action', 'create')
             custom_name = decision.get('custom_name')
-            entity_name = custom_name or schema_detection['suggested_name']
+            
+            # Phase 3: Determine version based on schema changes
             storage_type = schema_detection['storage_recommendation']
+            
+            # Calculate schema hash for matching
+            schema_hash = HashUtils.generate_schema_hash(schema_detection['fields'])
+            
+            # For evolve: Match by schema structure (hash), not name
+            if action == 'evolve':
+                # Find existing schema by hash (same structure = same table)
+                existing_schema = schema_registry.find_by_hash_and_user(schema_hash, user_id)
+                
+                if existing_schema:
+                    # Found matching schema - use its name
+                    base_name = existing_schema.schema_name
+                    print(f"🔍 Found existing schema by structure: {base_name}")
+                else:
+                    # No matching schema found - treat as new
+                    base_name = custom_name or schema_detection.get('suggested_name', 'default_table')
+                    print(f"✨ No matching schema found, creating new: {base_name}")
+            else:
+                # For create/new_table: Use provided name
+                base_name = custom_name or schema_detection['suggested_name']
+                existing_schema = None
+            
+            # MongoDB is schemaless - always use v1, no versioning needed
+            if storage_type == 'nosql':
+                version = 1
+                if existing_schema:
+                    print(f"📊 MongoDB: Using existing collection (schemaless, no versioning)")
+                else:
+                    print(f"✨ MongoDB: New collection {base_name}")
+            # SQL needs versioning for schema changes
+            elif existing_schema and action == 'evolve':
+                # Check if schema actually changed (new fields added)
+                existing_fields = set(existing_schema.fields.keys())
+                new_fields_set = set(schema_detection['fields'].keys())  # Use schema_detection, not schema
+                added_fields = new_fields_set - existing_fields
+                
+                if added_fields:
+                    # Schema evolved - increment version
+                    version = existing_schema.version + 1
+                    print(f"🔄 SQL: Schema evolution detected: {base_name} v{existing_schema.version} → v{version}")
+                    print(f"   New fields: {added_fields}")
+                else:
+                    # Exact match - use existing version
+                    version = existing_schema.version
+                    print(f"📊 SQL: Exact match - using existing version: v{version}")
+            else:
+                # New schema - start at version 1
+                version = 1
+                print(f"✨ SQL: New schema: {base_name} v{version}")
+            
+            # Phase 2 & 3: Build table/collection name with user isolation and version
+            if user_id:
+                clean_user_id = str(user_id).replace('-', '')[:8]
+                entity_name = f"user_{clean_user_id}_{base_name}_v{version}"
+            else:
+                entity_name = f"{base_name}_v{version}"
+            
+            storage_label = "Collection" if storage_type == 'nosql' else "Table"
+            print(f"📋 {storage_label} name: {entity_name} (user: {user_id}, base: {base_name}, version: {version})")
             
             # Update progress stage
             job.progress_stage = f'processing_{entity_name}'
@@ -205,18 +265,51 @@ def process_upload_task(
             
             # Create storage and insert data
             if storage_type == 'sql':
-                # Create table
-                success = sql_handler.create_table(
-                    table_name=entity_name,
-                    schema=schema,
-                    indexes=[]
-                )
+                # Phase 3: Handle version migration if needed
+                if version > 1 and existing_schema:
+                    # Schema evolved - need to migrate data from previous version
+                    old_version = version - 1
+                    if user_id:
+                        clean_user_id = str(user_id).replace('-', '')[:8]
+                        old_table_name = f"user_{clean_user_id}_{base_name}_v{old_version}"
+                    else:
+                        old_table_name = f"{base_name}_v{old_version}"
+                    
+                    print(f"📦 Migrating data from {old_table_name} to {entity_name}")
+                    
+                    # Create new table with evolved schema
+                    success = sql_handler.create_table(
+                        table_name=entity_name,
+                        schema=schema,
+                        indexes=[]
+                    )
+                    
+                    if success:
+                        # Copy all data from old version to new version
+                        migration_success = sql_handler.copy_table_data(
+                            source_table=old_table_name,
+                            target_table=entity_name,
+                            new_fields=added_fields if 'added_fields' in locals() else set()
+                        )
+                        
+                        if migration_success:
+                            print(f"✅ Migrated data from v{old_version} to v{version}")
+                        else:
+                            print(f"⚠️  Data migration had issues")
+                else:
+                    # Create table (new schema or exact match)
+                    success = sql_handler.create_table(
+                        table_name=entity_name,
+                        schema=schema,
+                        indexes=[]
+                    )
                 
                 if success:
-                    # Insert data
+                    # Insert new data with duplicate detection
                     insert_result = sql_handler.insert_data(
                         table_name=entity_name,
-                        data=norm_result.normalized_data
+                        data=norm_result.normalized_data,
+                        skip_duplicates=True  # Skip exact duplicates, update if data changed
                     )
                     
                     total_successful += insert_result.success_count
@@ -229,15 +322,45 @@ def process_upload_task(
                         failed_records=insert_result.failed_records
                     )
                     
-                    # Store in registry
-                    storage_location = f"postgres.public.{entity_name}"
-                    schema_registry.create_schema(
-                        schema=schema,
-                        schema_name=entity_name,
-                        storage_type='sql',
-                        storage_location=storage_location,
-                        user_id=user_id
-                    )
+                    # Store in registry (only if creating new, not evolving)
+                    if action != 'evolve':
+                        storage_location = f"postgres.public.{entity_name}"
+                        schema_registry.create_schema(
+                            schema=schema,
+                            schema_name=base_name,  # Store base name, not full table name
+                            storage_type='sql',
+                            storage_location=storage_location,
+                            user_id=user_id
+                        )
+                    else:
+                        # For evolve action - find by base name and user_id
+                        existing_schema = schema_registry.find_by_name_and_user(base_name, user_id)
+                        if existing_schema:
+                            # Check if schema actually changed (new fields added)
+                            existing_fields = set(existing_schema.fields.keys())
+                            new_fields = set(schema.fields.keys())
+                            added_fields = new_fields - existing_fields
+                            
+                            if added_fields:
+                                # True evolution - create new version
+                                print(f"🔄 Evolving schema '{entity_name}': adding fields {added_fields}")
+                                new_fields_dict = {
+                                    field: {
+                                        'type': schema.fields[field].type,
+                                        'nullable': schema.fields[field].nullable,
+                                        'indexed': False
+                                    }
+                                    for field in added_fields
+                                }
+                                schema_registry.evolve_schema(entity_name, new_fields_dict)
+                            else:
+                                # Exact match - just increment count
+                                print(f"📊 Exact match - incrementing record count for '{entity_name}'")
+                            
+                            schema_registry.increment_record_count(
+                                existing_schema.schema_id,
+                                insert_result.success_count
+                            )
                     
                     entities_created.append({
                         'name': entity_name,
@@ -302,15 +425,45 @@ def process_upload_task(
                         failed_records=insert_result.failed_records
                     )
                     
-                    # Store in registry
-                    storage_location = f"mongodb.smart_storage.{entity_name}"
-                    schema_registry.create_schema(
-                        schema=schema,
-                        schema_name=entity_name,
-                        storage_type='nosql',
-                        storage_location=storage_location,
-                        user_id=user_id
-                    )
+                    # Store in registry (only if creating new, not evolving)
+                    if action != 'evolve':
+                        storage_location = f"mongodb.smart_storage.{entity_name}"
+                        schema_registry.create_schema(
+                            schema=schema,
+                            schema_name=base_name,  # Store base name, not full table name
+                            storage_type='nosql',
+                            storage_location=storage_location,
+                            user_id=user_id
+                        )
+                    else:
+                        # For evolve action - find by base name and user_id
+                        existing_schema = schema_registry.find_by_name_and_user(base_name, user_id)
+                        if existing_schema:
+                            # Check if schema actually changed (new fields added)
+                            existing_fields = set(existing_schema.fields.keys())
+                            new_fields = set(schema.fields.keys())
+                            added_fields = new_fields - existing_fields
+                            
+                            if added_fields:
+                                # True evolution - create new version
+                                print(f"🔄 Evolving schema '{entity_name}': adding fields {added_fields}")
+                                new_fields_dict = {
+                                    field: {
+                                        'type': schema.fields[field].type,
+                                        'nullable': schema.fields[field].nullable,
+                                        'indexed': False
+                                    }
+                                    for field in added_fields
+                                }
+                                schema_registry.evolve_schema(entity_name, new_fields_dict)
+                            else:
+                                # Exact match - just increment count
+                                print(f"📊 Exact match - incrementing record count for '{entity_name}'")
+                            
+                            schema_registry.increment_record_count(
+                                existing_schema.schema_id,
+                                insert_result.success_count
+                            )
                     
                     entities_created.append({
                         'name': entity_name,

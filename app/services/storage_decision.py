@@ -80,9 +80,9 @@ class StorageDecisionEngine:
         else:
             passed_rules.append("Rule 1: Data Structure")
         
-        # Rule 2: Check null density
-        rule2_passed, rule2_reason = self._check_null_density(analysis.null_density)
-        metrics['null_density'] = analysis.null_density
+        # Rule 2: Check null density (per schema)
+        rule2_passed, rule2_reason = self._check_null_density(schema.null_density)
+        metrics['null_density'] = schema.null_density
         if not rule2_passed:
             failed_rules.append("Rule 2: Null Density")
             reasons.append(rule2_reason)
@@ -116,7 +116,7 @@ class StorageDecisionEngine:
         
         # All rules passed - SQL is appropriate
         reasons.append("All SQL eligibility rules passed")
-        reasons.append(f"Null density: {analysis.null_density}% (threshold: {self.null_density_threshold * 100}%)")
+        reasons.append(f"Null density: {schema.null_density}% (threshold: {self.null_density_threshold * 100}%)")
         reasons.append(f"Schema variants: {analysis.schema_variants} (max: {analysis.max_allowed_variants})")
         reasons.append(f"Type consistency: {type_consistency}% (threshold: {self.type_consistency_threshold * 100}%)")
         
@@ -319,3 +319,133 @@ class StorageDecisionEngine:
         """
         evaluation = self.evaluate_ambiguous_case(analysis)
         return evaluation['is_ambiguous']
+
+    def get_variance_recommendation(self, analysis: SchemaAnalysis) -> Dict[str, Any]:
+        """
+        Get recommendation based on variance level
+        
+        Args:
+            analysis: SchemaAnalysis object
+            
+        Returns:
+            Dictionary with variance recommendation details
+        """
+        from app.config import MAX_COLLECTIONS_PER_UPLOAD
+        
+        variance_level = analysis.variance_level
+        schema_variants = analysis.schema_variants
+        max_allowed = analysis.max_allowed_variants
+        
+        if variance_level == "low" or variance_level == "normal":
+            return {
+                "type": "separate_allowed",
+                "reason": f"Schema variants ({schema_variants}) within acceptable threshold ({max_allowed})",
+                "storage_type": "flexible",
+                "allow_override": False,
+                "merge_required": False,
+                "max_collections_allowed": MAX_COLLECTIONS_PER_UPLOAD,
+                "warnings": []
+            }
+        
+        elif variance_level == "high":
+            return {
+                "type": "merge_recommended",
+                "reason": f"Schema variants ({schema_variants}) exceed threshold ({max_allowed})",
+                "storage_type": "nosql",
+                "allow_override": True,
+                "merge_required": False,
+                "max_collections_allowed": MAX_COLLECTIONS_PER_UPLOAD,
+                "warnings": [
+                    "High schema variance detected",
+                    "Future uploads cannot be validated against a fixed schema",
+                    "Recommended: Use single collection for flexibility",
+                    f"If creating separate collections, limit to {MAX_COLLECTIONS_PER_UPLOAD} maximum"
+                ]
+            }
+        
+        else:  # extreme
+            return {
+                "type": "merge_required",
+                "reason": f"Schema variants ({schema_variants}) far exceed maximum allowed ({MAX_COLLECTIONS_PER_UPLOAD})",
+                "storage_type": "nosql",
+                "allow_override": False,
+                "merge_required": True,
+                "max_collections_allowed": 1,
+                "warnings": [
+                    "Extreme schema variance detected",
+                    "Cannot create separate collections - too many variations",
+                    "All data must be merged into a single NoSQL collection",
+                    "Future uploads will have no schema validation"
+                ]
+            }
+    
+    def get_decision_options(self, analysis: SchemaAnalysis) -> Dict[str, Any]:
+        """
+        Get available decision options for user
+        
+        Args:
+            analysis: SchemaAnalysis object
+            
+        Returns:
+            Dictionary with decision options
+        """
+        recommendation = self.get_variance_recommendation(analysis)
+        variance_level = analysis.variance_level
+        
+        options = {}
+        
+        # Option 1: Merged collection (always available for high/extreme variance)
+        if variance_level in ["high", "extreme"] and analysis.merged_schema:
+            options["option_1"] = {
+                "label": "Merge into single collection (Recommended)",
+                "action": "merge_all",
+                "schema_id": "merged_all",
+                "collections_created": 1,
+                "pros": [
+                    "Flexible schema - handles varying data structures",
+                    "Easy to query all data in one place",
+                    "Future-proof for schema changes",
+                    "NoSQL optimized for document variations"
+                ],
+                "cons": [
+                    "No strict schema validation",
+                    "Requires application-level data validation"
+                ],
+                "requires_confirmation": False
+            }
+        
+        # Option 2: Separate collections (conditional)
+        if variance_level == "high" and recommendation["allow_override"]:
+            options["option_2"] = {
+                "label": "Create separate collections (Advanced)",
+                "action": "create_separate",
+                "collections_created": analysis.schema_variants,
+                "pros": [
+                    "Organized by schema type",
+                    "Potential for better query performance on specific types"
+                ],
+                "cons": [
+                    "High maintenance overhead",
+                    "No future schema validation",
+                    "Complex cross-collection queries",
+                    f"Limited to {recommendation['max_collections_allowed']} collections maximum"
+                ],
+                "requires_confirmation": True,
+                "warnings": recommendation["warnings"]
+            }
+        
+        # For normal/low variance, no special options needed
+        if variance_level in ["low", "normal"]:
+            options["standard"] = {
+                "label": "Create collections as analyzed",
+                "action": "create_separate",
+                "collections_created": analysis.schema_variants,
+                "pros": [
+                    "Schema variants within acceptable range",
+                    "Each schema can be properly validated"
+                ],
+                "cons": [],
+                "requires_confirmation": False
+            }
+        
+        return options
