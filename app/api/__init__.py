@@ -5,6 +5,7 @@ from .health import server_health_router
 from .upload import router as upload_router
 from .query import router as query_router
 from .entities import router as entities_router
+from .media import router as media_router
 from app.controllers import auth_controller
 from app.controllers import file_controller
 
@@ -23,11 +24,18 @@ def add_routers(app: FastAPI) -> None:
         tags=["Authentication"]
     )
     
-    # File Storage (Media)
+    # File Storage (Media) - Legacy
     app.include_router(
         file_controller.router,
         prefix="/api",
-        tags=["File Storage"]
+        tags=["File Storage (Legacy)"]
+    )
+    
+    # Media Upload (Background Processing)
+    app.include_router(
+        media_router,
+        prefix="/api",
+        tags=["Media Upload"]
     )
     
     # Structured Data Upload

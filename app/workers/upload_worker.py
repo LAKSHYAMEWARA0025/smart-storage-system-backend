@@ -11,7 +11,7 @@ from mongoengine import connect
 
 from app.core.celery_app import celery_app
 from app.models.mongo_models import AnalysisDataModel, UploadJobModel, FailedRecordModel
-from app.config import MONGO_URI, MONGO_DB_NAME, SUPABASE_DB_URL
+from app.config import MONGO_URI, MONGO_DB_NAME, SUPABASE_DB_URL, SUPABASE_URL, SUPABASE_KEY, SUPABASE_SERVICE_KEY
 
 
 @worker_process_init.connect
@@ -36,6 +36,14 @@ def init_worker(**kwargs):
         config.mongo_client = AsyncIOMotorClient(MONGO_URI)
         config.mongodb = config.mongo_client[MONGO_DB_NAME]
         print("✅ Worker Motor connected")
+        
+        # Initialize Supabase clients
+        from supabase import create_client
+        from app.config import SUPABASE_URL, SUPABASE_KEY, SUPABASE_SERVICE_KEY
+        
+        config.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        config.supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        print("✅ Worker Supabase connected")
         
         # Initialize SQLAlchemy engine for PostgreSQL
         from sqlalchemy import create_engine

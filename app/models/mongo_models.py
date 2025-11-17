@@ -256,3 +256,70 @@ class AnalysisDataModel(Document):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'expires_at': self.expires_at.isoformat() if self.expires_at else None
         }
+
+
+class MediaUploadJobModel(Document):
+    """
+    Media Upload Job Document
+    Tracks background media upload job status and progress
+    """
+    
+    # Identification
+    job_id = StringField(required=True, primary_key=True)
+    user_id = StringField(required=True, index=True)
+    
+    # Status
+    status = StringField(
+        required=True,
+        choices=['queued', 'processing', 'completed', 'failed', 'completed_with_errors'],
+        default='queued'
+    )
+    
+    # Progress
+    progress_current = IntField(default=0)
+    progress_total = IntField(default=0)
+    progress_percentage = FloatField(default=0.0)
+    progress_stage = StringField(default='queued')  # queued, uploading, processing_metadata, completed
+    
+    # Files tracking
+    total_files = IntField(default=0)
+    uploaded_files = ListField(DictField())  # [{filename, url, public_url, size, content_type, metadata}]
+    failed_files = ListField(DictField())  # [{filename, error}]
+    
+    # Error information
+    error_message = StringField()
+    
+    # Timestamps
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+    completed_at = DateTimeField()
+    
+    meta = {
+        'collection': 'media_upload_jobs',
+        'auto_create_index': False,
+        'indexes': [
+            'job_id',
+            'user_id',
+            'status',
+            'created_at'
+        ]
+    }
+    
+    def to_dict(self):
+        """Convert to dictionary"""
+        return {
+            'job_id': self.job_id,
+            'status': self.status,
+            'progress': {
+                'current': self.progress_current,
+                'total': self.progress_total,
+                'percentage': self.progress_percentage,
+                'stage': self.progress_stage
+            } if self.progress_total > 0 else None,
+            'uploaded_files': self.uploaded_files,
+            'failed_files': self.failed_files,
+            'error_message': self.error_message if self.status == 'failed' else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None
+        }

@@ -397,26 +397,41 @@ async def search_files_by_type(
 
 @router.get("/files/categories")
 async def get_file_categories(
+    refresh: bool = False,
     current_user_id: UUID = Depends(get_current_user)
 ):
     """
     Get all file categories with counts and extensions for the authenticated user.
     Returns categorized summary of user's files.
+    
+    Args:
+        refresh: Set to true to bypass cache and get fresh data
     """
-    supabase, redis_client = get_clients()
+    # Use admin client to bypass RLS
+    supabase = get_admin_client()
+    redis_client = get_redis()
     
     cache_key = f"file_categories:{current_user_id}"
     
     try:
-        # Check cache
-        cached_data = await redis_client.get(cache_key)
-        if cached_data:
-            print(f"--- CACHE HIT for key: {cache_key} ---")
-            return json.loads(cached_data)
+        # Check cache (unless refresh is requested)
+        if not refresh:
+            cached_data = await redis_client.get(cache_key)
+            if cached_data:
+                print(f"--- CACHE HIT for key: {cache_key} ---")
+                return json.loads(cached_data)
+        else:
+            print(f"--- CACHE REFRESH requested for key: {cache_key} ---")
         
         # Fetch all user files
         print(f"--- CACHE MISS for key: {cache_key} ---")
+        print(f"--- Querying for user_id: {current_user_id} (type: {type(current_user_id)}) ---")
+        
         res = supabase.table("files").select("extension, category").eq("user_id", str(current_user_id)).execute()
+        
+        print(f"--- Query returned {len(res.data)} records ---")
+        if len(res.data) > 0:
+            print(f"--- Sample record: {res.data[0]} ---")
         
         # Aggregate by category
         categories_map = {}
@@ -464,6 +479,7 @@ async def get_file_categories(
 @router.get("/files/by-category")
 async def get_files_by_categories(
     categories: str,  # Comma-separated list: "images,videos"
+    refresh: bool = False,
     current_user_id: UUID = Depends(get_current_user)
 ):
     """
@@ -471,22 +487,28 @@ async def get_files_by_categories(
     
     Args:
         categories: Comma-separated category names (e.g., "images,videos,documents")
+        refresh: Set to true to bypass cache and get fresh data
     
     Returns:
         List of files matching the specified categories with full metadata
     """
-    supabase, redis_client = get_clients()
+    # Use admin client to bypass RLS
+    supabase = get_admin_client()
+    redis_client = get_redis()
     
     # Parse categories
     category_list = [cat.strip().lower() for cat in categories.split(',')]
     cache_key = f"files_by_category:{current_user_id}:{':'.join(sorted(category_list))}"
     
     try:
-        # Check cache
-        cached_data = await redis_client.get(cache_key)
-        if cached_data:
-            print(f"--- CACHE HIT for key: {cache_key} ---")
-            return json.loads(cached_data)
+        # Check cache (unless refresh is requested)
+        if not refresh:
+            cached_data = await redis_client.get(cache_key)
+            if cached_data:
+                print(f"--- CACHE HIT for key: {cache_key} ---")
+                return json.loads(cached_data)
+        else:
+            print(f"--- CACHE REFRESH requested for key: {cache_key} ---")
         
         # Fetch files matching categories
         print(f"--- CACHE MISS for key: {cache_key} ---")

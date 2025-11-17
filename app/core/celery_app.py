@@ -12,7 +12,10 @@ celery_app = Celery(
     "smart_storage",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=['app.workers.upload_worker']  # Import worker modules
+    include=[
+        'app.workers.upload_worker',
+        'app.workers.media_worker'
+    ]  # Import worker modules
 )
 
 # SSL configuration for rediss:// URLs
@@ -64,6 +67,10 @@ celery_app.conf.update(
     # Logging
     worker_log_format='[%(asctime)s: %(levelname)s/%(processName)s] %(message)s',
     worker_task_log_format='[%(asctime)s: %(levelname)s/%(processName)s][%(task_name)s(%(task_id)s)] %(message)s',
+    
+    # Ensure async execution (never run tasks synchronously)
+    task_always_eager=False,
+    task_eager_propagates=False,
     
     # SSL settings
     broker_use_ssl=broker_use_ssl,

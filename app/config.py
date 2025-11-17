@@ -263,3 +263,9 @@ def get_db():
 def get_mongodb():
     """Get Motor database instance (for async MongoDB operations)"""
     return mongodb
+
+def get_mongodb_sync():
+    """Get PyMongo database instance (for sync operations like GridFS)"""
+    from pymongo import MongoClient
+    client = MongoClient(MONGO_URI)
+    return client[MONGO_DB_NAME]
