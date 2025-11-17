@@ -223,6 +223,7 @@ class AnalysisDataModel(Document):
     schemas_detected = ListField(DictField())
     total_records = IntField()
     files_analyzed = IntField()
+    merged_schema = DictField()  # Merged schema for high variance cases
     
     # Parsed Data (stored temporarily)
     parsed_data = DictField()  # {schema_id: [objects]}

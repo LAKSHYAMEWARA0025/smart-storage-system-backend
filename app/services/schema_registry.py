@@ -121,6 +121,71 @@ class SchemaRegistry:
         except Exception:
             return None
     
+    def find_by_name_and_user(
+        self, 
+        schema_name: str, 
+        user_id: Optional[str] = None,
+        version: Optional[int] = None
+    ) -> Optional[SchemaRegistryModel]:
+        """
+        Find schema by name, user_id, and optional version (Phase 2: User Isolation)
+        
+        Args:
+            schema_name: Schema name (base name, not full table name)
+            user_id: User ID who owns the schema
+            version: Optional version number
+            
+        Returns:
+            SchemaRegistryModel or None
+        """
+        try:
+            query = {'schema_name': schema_name}
+            
+            # Phase 2: Filter by user_id
+            if user_id:
+                query['created_by'] = str(user_id)
+            
+            if version is not None:
+                query['version'] = version
+            else:
+                # Get latest version for this user
+                schemas = SchemaRegistryModel.objects(**query).order_by('-version')
+                return schemas.first()
+            
+            return SchemaRegistryModel.objects(**query).first()
+        except Exception:
+            return None
+    
+    def find_by_hash_and_user(
+        self,
+        schema_hash: str,
+        user_id: Optional[str] = None
+    ) -> Optional[SchemaRegistryModel]:
+        """
+        Find schema by hash and user_id (matches by structure, not name)
+        
+        Args:
+            schema_hash: Schema hash (from fields structure)
+            user_id: User ID who owns the schema
+            
+        Returns:
+            Latest version of matching schema or None
+        """
+        try:
+            query = {'schema_hash': schema_hash}
+            
+            # Filter by user_id
+            if user_id:
+                query['created_by'] = str(user_id)
+            
+            # Get latest version with this hash
+            schemas = SchemaRegistryModel.objects(**query).order_by('-version')
+            return schemas.first()
+            
+        except Exception as e:
+            print(f"Error finding schema by hash: {e}")
+            return None
+    
     def find_similar(
         self,
         field_names: set,

@@ -3,7 +3,7 @@ Schema Analysis Service
 Analyzes JSON data to detect schemas, calculate metrics, and prepare for storage decisions
 """
 
-from typing import List, Dict, Any, Set, Tuple
+from typing import List, Dict, Any, Set, Tuple, Optional
 from dataclasses import dataclass
 from app.utils.metrics import MetricsCalculator
 from app.utils.hash_utils import HashUtils, TypeConverter
@@ -30,6 +30,7 @@ class Schema:
     schema_hash: str
     has_nested_objects: bool
     has_arrays: bool
+    null_density: float = 0.0  # Per-schema null density
 
 
 @dataclass
@@ -42,6 +43,8 @@ class SchemaAnalysis:
     schema_variants: int
     max_allowed_variants: int
     metrics: Dict[str, Any]
+    variance_level: str = "normal"  # "low", "normal", "high", "extreme"
+    merged_schema: Optional['Schema'] = None  # Auto-generated merged option for high variance
 
 
 class SchemaAnalyzer:
@@ -81,6 +84,13 @@ class SchemaAnalyzer:
         # Step 4: Calculate comprehensive metrics
         all_metrics = MetricsCalculator.calculate_all_metrics(objects)
         
+        # Step 5: Determine variance level and create merged schema if needed
+        variance_level = self._calculate_variance_level(schema_variants, max_allowed_variants)
+        merged_schema = None
+        
+        if variance_level in ["high", "extreme"]:
+            merged_schema = self._create_merged_schema(schemas, objects)
+        
         return SchemaAnalysis(
             schemas=schemas,
             total_records=len(objects),
@@ -88,7 +98,9 @@ class SchemaAnalyzer:
             null_density=null_density,
             schema_variants=schema_variants,
             max_allowed_variants=max_allowed_variants,
-            metrics=all_metrics
+            metrics=all_metrics,
+            variance_level=variance_level,
+            merged_schema=merged_schema
         )
     
     def _extract_schemas(self, objects: List[Dict[str, Any]]) -> List[Schema]:
@@ -149,6 +161,9 @@ class SchemaAnalyzer:
         # Generate schema ID
         schema_id = HashUtils.generate_schema_id()
         
+        # Calculate null density for THIS schema group only
+        schema_null_density = MetricsCalculator.calculate_null_density(objects, field_names)
+        
         return Schema(
             schema_id=schema_id,
             fields=fields,
@@ -156,7 +171,8 @@ class SchemaAnalyzer:
             record_count=len(objects),
             schema_hash=schema_hash,
             has_nested_objects=has_nested_objects,
-            has_arrays=has_arrays
+            has_arrays=has_arrays,
+            null_density=schema_null_density  # Per-schema null density
         )
     
     def _analyze_field(self, objects: List[Dict[str, Any]], field_name: str) -> FieldInfo:
@@ -247,7 +263,9 @@ class SchemaAnalyzer:
             null_density=0.0,
             schema_variants=0,
             max_allowed_variants=0,
-            metrics={}
+            metrics={},
+            variance_level="normal",
+            merged_schema=None
         )
     
     def detect_nested_structures(self, schema: Schema) -> bool:
@@ -397,3 +415,110 @@ class SchemaAnalyzer:
                 for name, info in schema.fields.items()
             }
         }
+
+    def _calculate_variance_level(self, schema_variants: int, max_allowed: int) -> str:
+        """
+        Calculate variance level based on schema variants
+        
+        Args:
+            schema_variants: Number of detected schema variants
+            max_allowed: Maximum allowed variants (sqrt(N))
+            
+        Returns:
+            Variance level: "low", "normal", "high", "extreme"
+        """
+        if schema_variants <= max_allowed:
+            if schema_variants <= max(1, max_allowed // 2):
+                return "low"
+            return "normal"
+        
+        # High variance: exceeds threshold
+        from app.config import MAX_COLLECTIONS_PER_UPLOAD
+        
+        if schema_variants <= MAX_COLLECTIONS_PER_UPLOAD:
+            return "high"
+        
+        return "extreme"
+    
+    def _create_merged_schema(self, schemas: List[Schema], objects: List[Dict[str, Any]]) -> Schema:
+        """
+        Create a merged schema from all individual schemas
+        
+        Args:
+            schemas: List of individual schemas
+            objects: Original objects
+            
+        Returns:
+            Merged Schema object
+        """
+        # Merge all fields from all schemas
+        merged_fields = {}
+        unified_field_names = set()
+        has_nested_objects = False
+        has_arrays = False
+        
+        for schema in schemas:
+            # Ensure field_names is a set of strings
+            if isinstance(schema.field_names, set):
+                unified_field_names.update(schema.field_names)
+            elif isinstance(schema.field_names, (list, tuple)):
+                unified_field_names.update(set(schema.field_names))
+            else:
+                # If it's something else, get keys from fields dict
+                unified_field_names.update(schema.fields.keys())
+            
+            has_nested_objects = has_nested_objects or schema.has_nested_objects
+            has_arrays = has_arrays or schema.has_arrays
+            
+            # Merge field info
+            for field_name, field_info in schema.fields.items():
+                if field_name not in merged_fields:
+                    merged_fields[field_name] = field_info
+                else:
+                    # Field exists in multiple schemas - merge info
+                    existing = merged_fields[field_name]
+                    # Keep the more permissive nullable setting
+                    existing.nullable = existing.nullable or field_info.nullable
+                    # Combine sample values (handle unhashable types like dicts/lists)
+                    combined_samples = []
+                    seen_values = set()
+                    for val in existing.sample_values + field_info.sample_values:
+                        # Convert to string for comparison if unhashable
+                        try:
+                            val_key = val if isinstance(val, (str, int, float, bool, type(None))) else str(val)
+                            if val_key not in seen_values:
+                                seen_values.add(val_key)
+                                combined_samples.append(val)
+                        except (TypeError, ValueError):
+                            # If still unhashable, just append
+                            combined_samples.append(val)
+                    existing.sample_values = combined_samples[:5]
+        
+        # For fields that don't exist in all schemas, mark as nullable
+        for field_name in unified_field_names:
+            if field_name not in merged_fields:
+                # Analyze this field across all objects
+                merged_fields[field_name] = self._analyze_field(objects, field_name)
+            else:
+                # Mark as nullable if it doesn't appear in all schemas
+                field_count = sum(1 for s in schemas if field_name in s.field_names)
+                if field_count < len(schemas):
+                    merged_fields[field_name].nullable = True
+        
+        # Generate merged schema hash
+        field_types = {name: info.type for name, info in merged_fields.items()}
+        schema_hash = HashUtils.generate_schema_hash(field_types)
+        
+        # Calculate null density for merged schema
+        merged_null_density = MetricsCalculator.calculate_null_density(objects, unified_field_names)
+        
+        return Schema(
+            schema_id="merged_all",
+            fields=merged_fields,
+            field_names=unified_field_names,
+            record_count=len(objects),
+            schema_hash=schema_hash,
+            has_nested_objects=has_nested_objects,
+            has_arrays=has_arrays,
+            null_density=merged_null_density
+        )

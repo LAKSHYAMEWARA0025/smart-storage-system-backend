@@ -48,6 +48,12 @@ class AnalysisResponse(BaseModel):
     files_analyzed: int = Field(..., description="Number of files analyzed")
     schemas_detected: List[SchemaDetection] = Field(..., description="List of detected schemas")
     total_records: int = Field(..., description="Total number of records across all files")
+    schema_variants: int = Field(..., description="Number of unique schema variants detected")
+    max_allowed_variants: int = Field(..., description="Maximum allowed schema variants (sqrt(N))")
+    variance_level: str = Field(..., description="Variance level: low, normal, high, extreme")
+    recommendation: Dict[str, Any] = Field(..., description="Variance-based recommendation")
+    merged_schema: Optional[SchemaDetection] = Field(None, description="Auto-generated merged schema for high variance")
+    decision_options: Dict[str, Any] = Field(..., description="Available decision options")
     requires_decision: bool = Field(..., description="Whether user decision is required")
 
 
@@ -73,6 +79,14 @@ class ExecuteRequest(BaseModel):
     decisions: Dict[str, DecisionInput] = Field(
         ...,
         description="Map of schema_id to decision"
+    )
+    user_override: bool = Field(
+        False,
+        description="Set to true to override high variance recommendation and create separate collections"
+    )
+    acknowledge_risks: bool = Field(
+        False,
+        description="Set to true to acknowledge risks of creating separate collections with high variance"
     )
 
 
