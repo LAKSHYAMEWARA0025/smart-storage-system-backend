@@ -31,7 +31,7 @@ class QueryController:
         Query data from entity (table or collection)
         
         Args:
-            entity: Entity name
+            entity: Entity name (base name)
             filters: MongoDB-style filters
             sort: Sort specification
             limit: Max records to return
@@ -56,10 +56,14 @@ class QueryController:
             
             storage_type = schema_record.storage_type
             
-            # Query based on storage type
+            # Extract actual table/collection name from storage_location
+            # Format: "postgres.public.user_123_employees_v1" or "mongodb.smart_storage.user_123_orders_v1"
+            actual_name = schema_record.storage_location.split('.')[-1]
+            
+            # Query based on storage type using actual name
             if storage_type == 'sql':
                 data = await QueryController._query_sql(
-                    entity=entity,
+                    entity=actual_name,
                     filters=filters or {},
                     sort=sort or {},
                     limit=limit,
@@ -68,7 +72,7 @@ class QueryController:
                 )
             else:  # nosql
                 data = await QueryController._query_nosql(
-                    entity=entity,
+                    entity=actual_name,
                     filters=filters or {},
                     sort=sort or {},
                     limit=limit,
@@ -79,11 +83,12 @@ class QueryController:
             # Calculate query time
             query_time = (time.time() - start_time) * 1000  # Convert to ms
             
-            # Get total count (for pagination)
+            # Get total count (for pagination) using actual name
             total_count = await QueryController._get_total_count(
-                entity, storage_type, filters or {}
+                actual_name, storage_type, filters or {}
             )
             
+            # Return response with base name (entity), not actual name
             return {
                 'entity': entity,
                 'storage_type': storage_type,
@@ -131,54 +136,53 @@ class QueryController:
         """
         from sqlalchemy import Table, MetaData, select
         from app.config import sql_engine
-        
-        # Reflect table
+
         metadata = MetaData()
         table = Table(entity, metadata, autoload_with=sql_engine)
-        
-        # Build query
-        query = select(table)
-        
-        # Apply filters
+
+        translator = QueryTranslator()
+
+        # -----------------------------------------
+        # Determine projection (always remove record_hash)
+        # -----------------------------------------
+        if fields:
+            columns = translator.translate_projection(fields, table)
+            columns = [c for c in columns if c.name != "record_hash"]
+        else:
+            columns = [c for c in table.c if c.name != "record_hash"]
+
+        query = select(*columns)
+
+        # -----------------------------------------
+        # Filters
+        # -----------------------------------------
         if filters:
-            translator = QueryTranslator()
             conditions = translator.translate_to_sql(filters, table)
             if conditions:
                 query = query.where(*conditions)
-        
-        # Apply sort
+
+        # -----------------------------------------
+        # Sorting
+        # -----------------------------------------
         if sort:
-            translator = QueryTranslator()
             order_clauses = translator.translate_sort(sort, table)
             if order_clauses:
                 query = query.order_by(*order_clauses)
-        
-        # Apply projection
-        if fields:
-            translator = QueryTranslator()
-            columns = translator.translate_projection(fields, table)
-            query = select(*columns)
-            
-            # Re-apply filters and sort
-            if filters:
-                conditions = translator.translate_to_sql(filters, table)
-                if conditions:
-                    query = query.where(*conditions)
-            if sort:
-                order_clauses = translator.translate_sort(sort, table)
-                if order_clauses:
-                    query = query.order_by(*order_clauses)
-        
-        # Apply limit and offset
+
+        # -----------------------------------------
+        # Limit + offset
+        # -----------------------------------------
         query = query.limit(limit).offset(offset)
-        
-        # Execute query
+
+        # -----------------------------------------
+        # Execute
+        # -----------------------------------------
         with sql_engine.connect() as conn:
             result = conn.execute(query)
             rows = result.fetchall()
-            
-            # Convert to dictionaries
+
             return [dict(row._mapping) for row in rows]
+
     
     @staticmethod
     async def _query_nosql(

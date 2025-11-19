@@ -135,12 +135,13 @@ class EntitiesController:
                 )
             
             storage_type = schema.storage_type
+            actual_name = schema.storage_location.split('.')[-1]
             
             # Get storage-specific stats
             if storage_type == 'sql':
-                stats = await EntitiesController._get_sql_stats(entity_name)
+                stats = await EntitiesController._get_sql_stats(actual_name)
             else:
-                stats = await EntitiesController._get_nosql_stats(entity_name)
+                stats = await EntitiesController._get_nosql_stats(actual_name)
             
             # Combine with registry info
             return {
