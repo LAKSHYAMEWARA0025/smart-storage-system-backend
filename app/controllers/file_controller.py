@@ -546,7 +546,7 @@ async def get_all_files_admin(admin: dict = Depends(require_admin)):
     Demonstrates role-based access control.
     """
     try:
-        supabase, _ = get_clients()
+        supabase = get_admin_client()
         
         # Admin can see all files
         res = supabase.table("files").select("*").order("created_at", desc=True).limit(100).execute()
@@ -568,7 +568,7 @@ async def get_storage_stats(admin: dict = Depends(require_admin)):
     Admin-only endpoint to get storage statistics.
     """
     try:
-        supabase, _ = get_clients()
+        supabase = get_admin_client()
         
         # Get total files count
         files_res = supabase.table("files").select("id", count="exact").execute()

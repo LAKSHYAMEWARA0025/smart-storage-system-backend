@@ -78,13 +78,14 @@ async def upload_media(
             file_size = len(content)
             total_size += file_size
             
-            # Validate file
+            # Validate file (no MIME whitelist: accept any content-type but keep size/filename checks)
+            # Passing allowed_types=None disables the MIME type check in MediaHandler.validate_file
             is_valid, error_msg = media_handler.validate_file(
                 filename=file.filename,
                 size=file_size,
                 content_type=file.content_type,
                 max_size_mb=MAX_MEDIA_FILE_SIZE // (1024 * 1024),
-                allowed_types=ALLOWED_MEDIA_TYPES
+                allowed_types=None
             )
             
             if not is_valid:
