@@ -152,15 +152,34 @@ def process_upload_task(
         total_successful = 0
         total_failed = 0
         
+        # Determine which schemas to process
+        if 'merged_all' in decisions and analysis_data.merged_schema:
+            # User selected merged schema
+            schemas_to_process = [analysis_data.merged_schema]
+            print(f"📦 Processing merged schema")
+        else:
+            # User selected individual schemas
+            schemas_to_process = analysis_data.schemas_detected
+            print(f"📦 Processing {len(schemas_to_process)} individual schemas")
+        
         # Process each schema
-        for idx, schema_detection in enumerate(analysis_data.schemas_detected):
+        for idx, schema_detection in enumerate(schemas_to_process):
             schema_id = schema_detection['schema_id']
             decision = decisions.get(schema_id, {})
             
             # Get parsed data for this schema
-            schema_data = analysis_data.parsed_data.get(schema_id, [])
+            if schema_id == 'merged_all':
+                # For merged schema, get all data
+                schema_data = []
+                for data_list in analysis_data.parsed_data.values():
+                    schema_data.extend(data_list)
+                print(f"📊 Merged schema contains {len(schema_data)} total records")
+            else:
+                # For individual schema, get specific data
+                schema_data = analysis_data.parsed_data.get(schema_id, [])
             
             if not schema_data:
+                print(f"⚠️  No data found for schema {schema_id}, skipping")
                 continue
             
             # Update progress
@@ -330,20 +349,19 @@ def process_upload_task(
                         failed_records=insert_result.failed_records
                     )
                     
-                    # Store in registry (only if creating new, not evolving)
-                    if action != 'evolve':
-                        storage_location = f"postgres.public.{entity_name}"
-                        schema_registry.create_schema(
-                            schema=schema,
-                            schema_name=base_name,  # Store base name, not full table name
-                            storage_type='sql',
-                            storage_location=storage_location,
-                            user_id=user_id
-                        )
-                    else:
-                        # For evolve action - find by base name and user_id
-                        existing_schema = schema_registry.find_by_name_and_user(base_name, user_id)
-                        if existing_schema:
+                    # Check if schema already exists for this user
+                    existing_schema = schema_registry.find_by_name_and_user(base_name, user_id)
+                    
+                    if existing_schema:
+                        # Schema exists for this user
+                        if action == 'create':
+                            # User wants to create but schema exists - append data
+                            print(f"📊 SQL: Schema '{base_name}' already exists for user, appending data")
+                            schema_registry.increment_record_count(
+                                existing_schema.schema_id,
+                                insert_result.success_count
+                            )
+                        elif action == 'evolve':
                             # Check if schema actually changed (new fields added)
                             existing_fields = set(existing_schema.fields.keys())
                             new_fields = set(schema.fields.keys())
@@ -369,6 +387,17 @@ def process_upload_task(
                                 existing_schema.schema_id,
                                 insert_result.success_count
                             )
+                    else:
+                        # Schema doesn't exist - create new
+                        print(f"✨ SQL: Creating new schema '{base_name}' for user")
+                        storage_location = f"postgres.public.{entity_name}"
+                        schema_registry.create_schema(
+                            schema=schema,
+                            schema_name=base_name,  # Store base name, not full table name
+                            storage_type='sql',
+                            storage_location=storage_location,
+                            user_id=user_id
+                        )
                     
                     entities_created.append({
                         'name': entity_name,
@@ -433,20 +462,19 @@ def process_upload_task(
                         failed_records=insert_result.failed_records
                     )
                     
-                    # Store in registry (only if creating new, not evolving)
-                    if action != 'evolve':
-                        storage_location = f"mongodb.smart_storage.{entity_name}"
-                        schema_registry.create_schema(
-                            schema=schema,
-                            schema_name=base_name,  # Store base name, not full table name
-                            storage_type='nosql',
-                            storage_location=storage_location,
-                            user_id=user_id
-                        )
-                    else:
-                        # For evolve action - find by base name and user_id
-                        existing_schema = schema_registry.find_by_name_and_user(base_name, user_id)
-                        if existing_schema:
+                    # Check if schema already exists for this user
+                    existing_schema = schema_registry.find_by_name_and_user(base_name, user_id)
+                    
+                    if existing_schema:
+                        # Schema exists for this user
+                        if action == 'create':
+                            # User wants to create but schema exists - append data
+                            print(f"📊 NoSQL: Schema '{base_name}' already exists for user, appending data")
+                            schema_registry.increment_record_count(
+                                existing_schema.schema_id,
+                                insert_result.success_count
+                            )
+                        elif action == 'evolve':
                             # Check if schema actually changed (new fields added)
                             existing_fields = set(existing_schema.fields.keys())
                             new_fields = set(schema.fields.keys())
@@ -472,6 +500,17 @@ def process_upload_task(
                                 existing_schema.schema_id,
                                 insert_result.success_count
                             )
+                    else:
+                        # Schema doesn't exist - create new
+                        print(f"✨ NoSQL: Creating new schema '{base_name}' for user")
+                        storage_location = f"mongodb.smart_storage.{entity_name}"
+                        schema_registry.create_schema(
+                            schema=schema,
+                            schema_name=base_name,  # Store base name, not full table name
+                            storage_type='nosql',
+                            storage_location=storage_location,
+                            user_id=user_id
+                        )
                     
                     entities_created.append({
                         'name': entity_name,
