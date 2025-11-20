@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: smart-storage-api
+    env: docker
+    dockerCommand: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  - type: worker
+    name: smart-storage-worker
+    env: docker
+    dockerCommand: >
+      celery -A app.core.celery_app worker --loglevel=info --concurrency=4
